@@ -1,7 +1,7 @@
 import { JSDOM } from "jsdom";
 import { Readability } from "@mozilla/readability";
 import { summarizeSourceContent } from "./groq.js";
-import { YoutubeTranscript } from "youtube-transcript";
+import TranscriptAPI from "youtube-transcript-api";
 
 const FETCH_TIMEOUT_MS = 12000;
 
@@ -188,7 +188,7 @@ function stripTags(value) {
 async function fetchYoutubeTranscript(videoId) {
   if (!videoId) return "";
   try {
-    const transcript = await YoutubeTranscript.fetchTranscript(videoId);
+    const transcript = await TranscriptAPI.getTranscript(videoId);
     return (transcript || [])
       .map((t) => cleanText(t.text))
       .filter(Boolean)
