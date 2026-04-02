@@ -1,6 +1,7 @@
 import { JSDOM } from "jsdom";
 import { Readability } from "@mozilla/readability";
 import { summarizeSourceContent } from "./groq.js";
+import { YoutubeTranscript } from "youtube-transcript";
 
 const FETCH_TIMEOUT_MS = 12000;
 
@@ -186,47 +187,74 @@ function stripTags(value) {
 
 async function fetchYoutubeTranscript(videoId) {
   if (!videoId) return "";
-  const url = `https://www.youtube.com/api/timedtext?lang=en&v=${encodeURIComponent(videoId)}`;
-  const xml = await fetchText(url).catch(() => "");
-  if (!xml || !xml.includes("<text")) return "";
-  return stripTags(xml).slice(0, 25000);
+  try {
+    const transcript = await YoutubeTranscript.fetchTranscript(videoId);
+    return (transcript || [])
+      .map((t) => cleanText(t.text))
+      .filter(Boolean)
+      .join(" ");
+  } catch (err) {
+    console.error("YoutubeTranscript Failed:", err.message);
+    return "";
+  }
 }
 
 async function extractYoutube(urlObj) {
+  const videoId = getYoutubeId(urlObj);
+  const canonicalUrl = videoId
+    ? `https://www.youtube.com/watch?v=${videoId}`
+    : urlObj.toString();
+
+  let html = "";
+  let directFetchFailed = false;
+
   try {
-    const videoId = getYoutubeId(urlObj);
-    const canonicalUrl = videoId
-      ? `https://www.youtube.com/watch?v=${videoId}`
-      : urlObj.toString();
-    const html = await fetchText(canonicalUrl);
-    const metaDescription = parseMetaDescription(html);
-    const shortDescription = parseShortDescription(html);
-    const transcript = await fetchYoutubeTranscript(videoId);
-    const titleMatch = html.match(/<title>([\s\S]*?)<\/title>/i);
-    const title =
-      cleanText((titleMatch ? titleMatch[1] : "").replace("- YouTube", "")) ||
-      "YouTube video";
-    const combined = [title, shortDescription, metaDescription, transcript]
-      .map(cleanText)
-      .filter(Boolean)
-      .join("\n\n");
-    if (!combined) {
-      throw new Error("Could not extract usable content from this YouTube URL.");
-    }
-    return {
-      sourceType: "youtube",
-      sourceTitle: title,
-      extractedText: combined.slice(0, 30000),
-    };
+    html = await fetchText(canonicalUrl);
   } catch (err) {
-    console.warn("YouTube Direct Extraction Failed, trying mirror...", err.message);
-    // FALLBACK: Use Jina Reader mirror for YouTube
-    const mirrorResult = await fetchArticleViaMirror(urlObj.toString());
-    return {
-      ...mirrorResult,
-      sourceType: "youtube", // Keep it as youtube type for UI consistency
-    };
+    console.error("YouTube Direct Fetch Failed (likely IP block):", err.message);
+    directFetchFailed = true;
   }
+
+  // If direct fetch failed, try to get at least the transcript and maybe use a mirror for metadata
+  const transcript = await fetchYoutubeTranscript(videoId);
+
+  if (directFetchFailed) {
+    // FALLBACK: Use Jina mirror for metadata if direct fetch failed
+    try {
+      const mirrorData = await fetchArticleViaMirror(canonicalUrl);
+      return {
+        sourceType: "youtube",
+        sourceTitle: mirrorData.sourceTitle.replace("Article from ", ""),
+        extractedText: `${mirrorData.sourceTitle}\n\n${transcript || mirrorData.extractedText}`.slice(0, 30000),
+      };
+    } catch (mirrorErr) {
+      if (!transcript) {
+        throw new Error("Could not extract any content from this YouTube URL.");
+      }
+    }
+  }
+
+  const metaDescription = parseMetaDescription(html);
+  const shortDescription = parseShortDescription(html);
+  const titleMatch = html.match(/<title>([\s\S]*?)<\/title>/i);
+  const title =
+    cleanText((titleMatch ? titleMatch[1] : "").replace("- YouTube", "")) ||
+    "YouTube video";
+
+  const combined = [title, shortDescription, metaDescription, transcript]
+    .map(cleanText)
+    .filter(Boolean)
+    .join("\n\n");
+
+  if (!combined) {
+    throw new Error("Could not extract usable content from this YouTube URL.");
+  }
+
+  return {
+    sourceType: "youtube",
+    sourceTitle: title,
+    extractedText: combined.slice(0, 30000),
+  };
 }
 
 export async function normalizeInputForGeneration(userInput) {
