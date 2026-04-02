@@ -49,7 +49,14 @@ router.post("/", async (req, res) => {
       userMessage = "AI service quota exceeded. Falling back to template mode.";
     }
 
-    res.status(500).json({ error: userMessage });
+    res.status(500).json({ 
+      error: userMessage,
+      debug: {
+        raw: message,
+        code: code,
+        full: err
+      }
+    });
   }
 });
 
