@@ -193,30 +193,40 @@ async function fetchYoutubeTranscript(videoId) {
 }
 
 async function extractYoutube(urlObj) {
-  const videoId = getYoutubeId(urlObj);
-  const canonicalUrl = videoId
-    ? `https://www.youtube.com/watch?v=${videoId}`
-    : urlObj.toString();
-  const html = await fetchText(canonicalUrl);
-  const metaDescription = parseMetaDescription(html);
-  const shortDescription = parseShortDescription(html);
-  const transcript = await fetchYoutubeTranscript(videoId);
-  const titleMatch = html.match(/<title>([\s\S]*?)<\/title>/i);
-  const title =
-    cleanText((titleMatch ? titleMatch[1] : "").replace("- YouTube", "")) ||
-    "YouTube video";
-  const combined = [title, shortDescription, metaDescription, transcript]
-    .map(cleanText)
-    .filter(Boolean)
-    .join("\n\n");
-  if (!combined) {
-    throw new Error("Could not extract usable content from this YouTube URL.");
+  try {
+    const videoId = getYoutubeId(urlObj);
+    const canonicalUrl = videoId
+      ? `https://www.youtube.com/watch?v=${videoId}`
+      : urlObj.toString();
+    const html = await fetchText(canonicalUrl);
+    const metaDescription = parseMetaDescription(html);
+    const shortDescription = parseShortDescription(html);
+    const transcript = await fetchYoutubeTranscript(videoId);
+    const titleMatch = html.match(/<title>([\s\S]*?)<\/title>/i);
+    const title =
+      cleanText((titleMatch ? titleMatch[1] : "").replace("- YouTube", "")) ||
+      "YouTube video";
+    const combined = [title, shortDescription, metaDescription, transcript]
+      .map(cleanText)
+      .filter(Boolean)
+      .join("\n\n");
+    if (!combined) {
+      throw new Error("Could not extract usable content from this YouTube URL.");
+    }
+    return {
+      sourceType: "youtube",
+      sourceTitle: title,
+      extractedText: combined.slice(0, 30000),
+    };
+  } catch (err) {
+    console.warn("YouTube Direct Extraction Failed, trying mirror...", err.message);
+    // FALLBACK: Use Jina Reader mirror for YouTube
+    const mirrorResult = await fetchArticleViaMirror(urlObj.toString());
+    return {
+      ...mirrorResult,
+      sourceType: "youtube", // Keep it as youtube type for UI consistency
+    };
   }
-  return {
-    sourceType: "youtube",
-    sourceTitle: title,
-    extractedText: combined.slice(0, 30000),
-  };
 }
 
 export async function normalizeInputForGeneration(userInput) {
