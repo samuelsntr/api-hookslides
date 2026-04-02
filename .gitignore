@@ -1,0 +1,4 @@
+# SQLite / local databases
+.env
+node_modules
+package-lock.json
