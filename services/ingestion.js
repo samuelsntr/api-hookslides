@@ -3,15 +3,6 @@ import { Readability } from "@mozilla/readability";
 import { summarizeSourceContent } from "./groq.js";
 import { Innertube } from "youtubei.js";
 
-let youtube;
-
-async function getYoutubeClient() {
-  if (!youtube) {
-    youtube = await Innertube.create();
-  }
-  return youtube;
-}
-
 const FETCH_TIMEOUT_MS = 12000;
 
 function withTimeout(ms = FETCH_TIMEOUT_MS) {
@@ -194,32 +185,176 @@ function stripTags(value) {
   return cleanText(value.replace(/<[^>]+>/g, " "));
 }
 
-async function fetchYoutubeTranscript(videoId) {
-  if (!videoId) return "";
+/**
+ * Method 1: Extract caption track URL from the video page HTML and fetch
+ * the transcript XML directly via YouTube's timedtext endpoint.
+ * This avoids the Innertube API entirely and is less likely to be blocked.
+ */
+async function fetchTranscriptFromCaptionTrack(videoId, html) {
+  // Parse the captionTracks array from the serialized ytInitialPlayerResponse
+  const captionTracksMatch = html.match(/"captionTracks":(\[.*?\])/s);
+  if (!captionTracksMatch) return "";
 
+  let captionTracks;
   try {
-    const yt = await getYoutubeClient();
-    async function withAsyncTimeout(promise, ms = 10000) {
-    const timeout = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("Timeout")), ms)
-      );
-      return Promise.race([promise, timeout]);
-    }
-
-    const info = await withAsyncTimeout(yt.getInfo(videoId));
-    const transcriptData = await info.getTranscript();
-
-    const segments =
-      transcriptData?.transcript?.content?.body?.initial_segments || [];
-
-    return segments
-      .map((s) => cleanText(s.snippet?.text))
-      .filter(Boolean)
-      .join(" ");
-  } catch (err) {
-    console.error("Youtube Transcript Failed:", err.message);
+    captionTracks = JSON.parse(captionTracksMatch[1]);
+  } catch {
     return "";
   }
+
+  if (!captionTracks || captionTracks.length === 0) return "";
+
+  // Prefer English, fall back to first available
+  const track =
+    captionTracks.find(
+      (t) => t.languageCode === "en" && !t.kind,
+    ) ||
+    captionTracks.find((t) => t.languageCode === "en") ||
+    captionTracks[0];
+
+  if (!track?.baseUrl) return "";
+
+  // Fetch the transcript XML
+  const { controller, clear } = withTimeout(10000);
+  try {
+    const res = await fetch(track.baseUrl, {
+      signal: controller.signal,
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+        Accept: "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        Referer: `https://www.youtube.com/watch?v=${videoId}`,
+      },
+    });
+    if (!res.ok) return "";
+    const xml = await res.text();
+    // Parse <text> nodes from XML
+    const matches = [...xml.matchAll(/<text[^>]*>([\s\S]*?)<\/text>/g)];
+    return matches
+      .map((m) =>
+        cleanText(
+          m[1]
+            .replace(/&amp;/g, "&")
+            .replace(/&lt;/g, "<")
+            .replace(/&gt;/g, ">")
+            .replace(/&quot;/g, '"')
+            .replace(/&#39;/g, "'")
+            .replace(/<[^>]+>/g, " "),
+        ),
+      )
+      .filter(Boolean)
+      .join(" ");
+  } finally {
+    clear();
+  }
+}
+
+/**
+ * Method 2: Use youtubei.js Innertube client (works well locally,
+ * may be blocked from cloud datacenter IPs).
+ */
+async function fetchTranscriptViaInnertube(videoId) {
+  async function withAsyncTimeout(promise, ms = 10000) {
+    const timeout = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("Timeout")), ms),
+    );
+    return Promise.race([promise, timeout]);
+  }
+  const yt = await Innertube.create();
+  const info = await withAsyncTimeout(yt.getInfo(videoId));
+  const transcriptData = await info.getTranscript();
+  const segments =
+    transcriptData?.transcript?.content?.body?.initial_segments || [];
+  return segments
+    .map((s) => cleanText(s.snippet?.text))
+    .filter(Boolean)
+    .join(" ");
+}
+
+/**
+ * Method 3: Use Supadata API — a managed service that reliably fetches
+ * YouTube transcripts from production/cloud environments.
+ * Requires SUPADATA_API_KEY env variable. Free tier: 100 req/month.
+ * Sign up at https://supadata.ai
+ */
+async function fetchTranscriptViaSupadata(videoId) {
+  const apiKey = process.env.SUPADATA_API_KEY;
+  if (!apiKey) throw new Error("SUPADATA_API_KEY not configured");
+
+  const { controller, clear } = withTimeout(15000);
+  try {
+    const res = await fetch(
+      `https://api.supadata.ai/v1/youtube/transcript?videoId=${encodeURIComponent(videoId)}&text=true`,
+      {
+        signal: controller.signal,
+        headers: {
+          "x-api-key": apiKey,
+          Accept: "application/json",
+        },
+      },
+    );
+    if (!res.ok) throw new Error(`Supadata API error: ${res.status}`);
+    const data = await res.json();
+    // data.content is an array of { text, offset, duration } objects
+    if (Array.isArray(data.content)) {
+      return data.content
+        .map((seg) => cleanText(seg.text))
+        .filter(Boolean)
+        .join(" ");
+    }
+    // Some responses return a plain text field
+    if (typeof data.content === "string") return cleanText(data.content);
+    return "";
+  } finally {
+    clear();
+  }
+}
+
+/**
+ * Main transcript fetcher — tries multiple methods in order:
+ * 1. Parse caption track from video page HTML (no Innertube, least blocked)
+ * 2. youtubei.js Innertube API (reliable locally)
+ * 3. Supadata managed API (reliable in production cloud, needs API key)
+ */
+async function fetchYoutubeTranscript(videoId, pageHtml = "") {
+  if (!videoId) return "";
+
+  // Method 1: caption track URL from page HTML
+  try {
+    const transcript = await fetchTranscriptFromCaptionTrack(videoId, pageHtml);
+    if (transcript) {
+      console.log("[Transcript] Method 1 (caption track) succeeded.");
+      return transcript;
+    }
+  } catch (err) {
+    console.warn("[Transcript] Method 1 failed:", err.message);
+  }
+
+  // Method 2: youtubei.js Innertube
+  try {
+    const transcript = await fetchTranscriptViaInnertube(videoId);
+    if (transcript) {
+      console.log("[Transcript] Method 2 (Innertube) succeeded.");
+      return transcript;
+    }
+  } catch (err) {
+    console.warn("[Transcript] Method 2 (Innertube) failed:", err.message);
+  }
+
+  // Method 3: Supadata API (production-reliable, requires API key)
+  try {
+    const transcript = await fetchTranscriptViaSupadata(videoId);
+    if (transcript) {
+      console.log("[Transcript] Method 3 (Supadata) succeeded.");
+      return transcript;
+    }
+  } catch (err) {
+    console.warn("[Transcript] Method 3 (Supadata) failed:", err.message);
+  }
+
+  console.error("[Transcript] All methods failed for video:", videoId);
+  return "";
 }
 
 async function extractYoutube(urlObj) {
@@ -230,7 +365,8 @@ async function extractYoutube(urlObj) {
   const html = await fetchText(canonicalUrl);
   const metaDescription = parseMetaDescription(html);
   const shortDescription = parseShortDescription(html);
-  const transcript = await fetchYoutubeTranscript(videoId);
+  // Pass the already-fetched HTML so Method 1 can parse caption tracks without an extra request
+  const transcript = await fetchYoutubeTranscript(videoId, html);
   const titleMatch = html.match(/<title>([\s\S]*?)<\/title>/i);
   const title =
     cleanText((titleMatch ? titleMatch[1] : "").replace("- YouTube", "")) ||
