@@ -186,6 +186,44 @@ function stripTags(value) {
 }
 
 /**
+ * Extract the video title from the YouTube watch page HTML.
+ * Tries multiple sources in order of reliability:
+ *   1. og:title meta tag  (always the clean video title)
+ *   2. ytInitialData videoPrimaryInfoRenderer title runs
+ *   3. <title> tag (strip " - YouTube" suffix)
+ */
+function parseYoutubeTitle(html) {
+  // 1. og:title (most reliable — always the plain video title without suffix)
+  const ogTitleMatch =
+    html.match(/<meta\s+property=["']og:title["']\s+content=["']([^"']+)["']/i) ||
+    html.match(/<meta\s+content=["']([^"']+)["']\s+property=["']og:title["']/i);
+  if (ogTitleMatch) {
+    const t = cleanText(ogTitleMatch[1]);
+    if (t) return t;
+  }
+
+  // 2. ytInitialData title runs embedded in the page JS
+  const ytTitleMatch = html.match(/"videoPrimaryInfoRenderer".*?"title":\{"runs":\[\{"text":"([^"]+)"/);
+  if (ytTitleMatch) {
+    const t = cleanText(ytTitleMatch[1]);
+    if (t) return t;
+  }
+
+  // 3. <title> tag fallback
+  const titleTagMatch = html.match(/<title>([\s\S]*?)<\/title>/i);
+  if (titleTagMatch) {
+    const t = cleanText(
+      titleTagMatch[1]
+        .replace(/\s*[-–|]\s*YouTube\s*$/i, "")
+        .replace(/\s*-\s*YouTube\s*$/i, ""),
+    );
+    if (t) return t;
+  }
+
+  return "";
+}
+
+/**
  * Method 1: Extract caption track URL from the video page HTML and fetch
  * the transcript XML directly via YouTube's timedtext endpoint.
  * This avoids the Innertube API entirely and is less likely to be blocked.
@@ -367,10 +405,7 @@ async function extractYoutube(urlObj) {
   const shortDescription = parseShortDescription(html);
   // Pass the already-fetched HTML so Method 1 can parse caption tracks without an extra request
   const transcript = await fetchYoutubeTranscript(videoId, html);
-  const titleMatch = html.match(/<title>([\s\S]*?)<\/title>/i);
-  const title =
-    cleanText((titleMatch ? titleMatch[1] : "").replace("- YouTube", "")) ||
-    "YouTube video";
+  const title = parseYoutubeTitle(html) || "YouTube Video";
   const combined = [title, shortDescription, metaDescription, transcript]
     .map(cleanText)
     .filter(Boolean)
