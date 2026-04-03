@@ -320,6 +320,15 @@ async function fetchTranscriptViaSupadata(videoId) {
   const apiKey = process.env.SUPADATA_API_KEY;
   if (!apiKey) throw new Error("SUPADATA_API_KEY not configured");
 
+  // Safeguard: Only use Supadata in production or if explicitly forced
+  const isProd = process.env.NODE_ENV === "production";
+  const forceLocal = process.env.ALLOW_SUPADATA_LOCAL === "true";
+  
+  if (!isProd && !forceLocal) {
+    console.log("[Transcript] Skipping Supadata fallback because environment is not production.");
+    return "";
+  }
+
   const { controller, clear } = withTimeout(15000);
   try {
     const res = await fetch(
