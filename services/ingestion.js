@@ -1,7 +1,16 @@
 import { JSDOM } from "jsdom";
 import { Readability } from "@mozilla/readability";
 import { summarizeSourceContent } from "./groq.js";
-import TranscriptAPI from "youtube-transcript-api";
+import { Innertube } from "youtubei.js";
+
+let youtube;
+
+async function getYoutubeClient() {
+  if (!youtube) {
+    youtube = await Innertube.create();
+  }
+  return youtube;
+}
 
 const FETCH_TIMEOUT_MS = 12000;
 
@@ -187,14 +196,28 @@ function stripTags(value) {
 
 async function fetchYoutubeTranscript(videoId) {
   if (!videoId) return "";
+
   try {
-    const transcript = await TranscriptAPI.getTranscript(videoId);
-    return (transcript || [])
-      .map((t) => cleanText(t.text))
+    const yt = await getYoutubeClient();
+    async function withAsyncTimeout(promise, ms = 10000) {
+    const timeout = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("Timeout")), ms)
+      );
+      return Promise.race([promise, timeout]);
+    }
+
+    const info = await withAsyncTimeout(yt.getInfo(videoId));
+    const transcriptData = await info.getTranscript();
+
+    const segments =
+      transcriptData?.transcript?.content?.body?.initial_segments || [];
+
+    return segments
+      .map((s) => cleanText(s.snippet?.text))
       .filter(Boolean)
       .join(" ");
   } catch (err) {
-    console.error("YoutubeTranscript Failed:", err.message);
+    console.error("Youtube Transcript Failed:", err.message);
     return "";
   }
 }
@@ -204,52 +227,21 @@ async function extractYoutube(urlObj) {
   const canonicalUrl = videoId
     ? `https://www.youtube.com/watch?v=${videoId}`
     : urlObj.toString();
-
-  let html = "";
-  let directFetchFailed = false;
-
-  try {
-    html = await fetchText(canonicalUrl);
-  } catch (err) {
-    console.error("YouTube Direct Fetch Failed (likely IP block):", err.message);
-    directFetchFailed = true;
-  }
-
-  // If direct fetch failed, try to get at least the transcript and maybe use a mirror for metadata
-  const transcript = await fetchYoutubeTranscript(videoId);
-
-  if (directFetchFailed) {
-    // FALLBACK: Use Jina mirror for metadata if direct fetch failed
-    try {
-      const mirrorData = await fetchArticleViaMirror(canonicalUrl);
-      return {
-        sourceType: "youtube",
-        sourceTitle: mirrorData.sourceTitle.replace("Article from ", ""),
-        extractedText: `${mirrorData.sourceTitle}\n\n${transcript || mirrorData.extractedText}`.slice(0, 30000),
-      };
-    } catch (mirrorErr) {
-      if (!transcript) {
-        throw new Error("Could not extract any content from this YouTube URL.");
-      }
-    }
-  }
-
+  const html = await fetchText(canonicalUrl);
   const metaDescription = parseMetaDescription(html);
   const shortDescription = parseShortDescription(html);
+  const transcript = await fetchYoutubeTranscript(videoId);
   const titleMatch = html.match(/<title>([\s\S]*?)<\/title>/i);
   const title =
     cleanText((titleMatch ? titleMatch[1] : "").replace("- YouTube", "")) ||
     "YouTube video";
-
   const combined = [title, shortDescription, metaDescription, transcript]
     .map(cleanText)
     .filter(Boolean)
     .join("\n\n");
-
   if (!combined) {
     throw new Error("Could not extract usable content from this YouTube URL.");
   }
-
   return {
     sourceType: "youtube",
     sourceTitle: title,
