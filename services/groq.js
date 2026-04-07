@@ -72,12 +72,13 @@ export async function summarizeSourceContent(sourceType, sourceText) {
   const prompt = `You are a content analyst.
 
 Task:
-Summarize the source content into concise creator-ready notes for an Instagram carousel writer.
+Detect the primary language of the source content (English or Indonesian) and summarize it into concise creator-ready notes for an Instagram carousel writer IN THAT DETECTED LANGUAGE.
 
 Rules:
 - Keep all important facts and key ideas
 - Keep chronology if the source is story-based
-- Use simple English
+- Write entirely in the same language as the source (English or Indonesian).
+- If Indonesian, use natural, conversational language (Bahasa Indonesia gaul/kasual tapi profesional, tidak kaku).
 - Do not include emojis
 - Do not include hashtags
 - Return plain text only
@@ -182,9 +183,12 @@ If strategy is "Contrarian":
 - Challenge common beliefs
 - Use bold, opinionated statements (but still logical)
 
-STYLE RULES:
-- Use simple English
-- Short, clean sentences
+LANGUAGE & STYLE RULES:
+- IMPORTANT: First, detect the primary language of the INPUT (English or Indonesian).
+- You MUST write the entire carousel in that EXACT SAME language.
+- If English: Use simple, clean syntax. Short, punchy sentences.
+- If Indonesian: Gunakan Bahasa Indonesia yang natural, asik, tidak kaku, dan mudah dicerna (seperti gaya tulisan creator lokal populer). Hindari gaya bahasa mesin/terjemahan kaku. Gunakan kata ganti santai yang profesional (seperti 'kamu' atau 'kita').
+- Short, clean sentences (Kalimat pendek dan padat)
 - No emojis
 - No hashtags
 - No filler phrases

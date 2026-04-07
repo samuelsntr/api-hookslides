@@ -65,7 +65,7 @@ async function fetchText(url) {
           "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
         Accept:
           "text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.8,*/*;q=0.7",
-        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Language": "en-US,en;q=0.9,id;q=0.8",
         Referer: "https://www.google.com/",
       },
     });
@@ -245,9 +245,9 @@ async function fetchTranscriptFromCaptionTrack(videoId, html) {
   // Prefer English, fall back to first available
   const track =
     captionTracks.find(
-      (t) => t.languageCode === "en" && !t.kind,
+      (t) => (t.languageCode === "en" || t.languageCode === "id") && !t.kind,
     ) ||
-    captionTracks.find((t) => t.languageCode === "en") ||
+    captionTracks.find((t) => t.languageCode === "en" || t.languageCode === "id") ||
     captionTracks[0];
 
   if (!track?.baseUrl) return "";
@@ -261,7 +261,7 @@ async function fetchTranscriptFromCaptionTrack(videoId, html) {
         "User-Agent":
           "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
         Accept: "*/*",
-        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Language": "en-US,en;q=0.9,id;q=0.8",
         Referer: `https://www.youtube.com/watch?v=${videoId}`,
       },
     });
